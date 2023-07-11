@@ -163,16 +163,18 @@ def set_torch_2_attn(unet):
 def handle_memory_attention(enable_xformers_memory_efficient_attention, enable_torch_2_attn, unet): 
     try:
         is_torch_2 = hasattr(F, 'scaled_dot_product_attention')
-
-        if enable_xformers_memory_efficient_attention and not is_torch_2:
+        enable_torch_2 = is_torch_2 and enable_torch_2_attn
+        
+        if enable_xformers_memory_efficient_attention and not enable_torch_2:
             if is_xformers_available():
                 from xformers.ops import MemoryEfficientAttentionFlashAttentionOp
                 unet.enable_xformers_memory_efficient_attention(attention_op=MemoryEfficientAttentionFlashAttentionOp)
             else:
                 raise ValueError("xformers is not available. Make sure it is installed correctly")
         
-        if enable_torch_2_attn and is_torch_2:
+        if enable_torch_2:
             set_torch_2_attn(unet)
+            
     except:
         print("Could not enable memory efficient attention for xformers or Torch 2.0.")
 
@@ -440,7 +442,7 @@ def tensor_to_vae_latent(t, vae):
 
     return latents
 
-def sample_noise(latents, noise_strength, use_offset_noise):
+def sample_noise(latents, noise_strength, use_offset_noise=False):
     b ,c, f, *_ = latents.shape
     noise_latents = torch.randn_like(latents, device=latents.device)
     offset_noise = None
@@ -450,6 +452,37 @@ def sample_noise(latents, noise_strength, use_offset_noise):
         noise_latents = noise_latents + noise_strength * offset_noise
 
     return noise_latents
+
+def enforce_zero_terminal_snr(betas):
+    """
+    Corrects noise in diffusion schedulers.
+    From: Common Diffusion Noise Schedules and Sample Steps are Flawed
+    https://arxiv.org/pdf/2305.08891.pdf
+    """
+    # Convert betas to alphas_bar_sqrt
+    alphas = 1 - betas
+    alphas_bar = alphas.cumprod(0)
+    alphas_bar_sqrt = alphas_bar.sqrt()
+
+    # Store old values.
+    alphas_bar_sqrt_0 = alphas_bar_sqrt[0].clone()
+    alphas_bar_sqrt_T = alphas_bar_sqrt[-1].clone()
+
+    # Shift so the last timestep is zero.
+    alphas_bar_sqrt -= alphas_bar_sqrt_T
+
+    # Scale so the first timestep is back to the old value.
+    alphas_bar_sqrt *= alphas_bar_sqrt_0 / (
+        alphas_bar_sqrt_0 - alphas_bar_sqrt_T
+    )
+
+    # Convert alphas_bar_sqrt to betas
+    alphas_bar = alphas_bar_sqrt ** 2
+    alphas = alphas_bar[1:] / alphas_bar[:-1]
+    alphas = torch.cat([alphas_bar[0:1], alphas])
+    betas = 1 - alphas
+
+    return betas
 
 def should_sample(global_step, validation_steps, validation_data):
     return (global_step % validation_steps == 0 or global_step == 1)  \
@@ -480,15 +513,15 @@ def save_pipe(
     u_dtype, t_dtype, v_dtype = unet.dtype, text_encoder.dtype, vae.dtype 
 
    # Copy the model without creating a reference to it. This allows keeping the state of our lora training if enabled.
-    unet_out = copy.deepcopy(accelerator.unwrap_model(unet, keep_fp32_wrapper=False))
-    text_encoder_out = copy.deepcopy(accelerator.unwrap_model(text_encoder, keep_fp32_wrapper=False))
+    unet_out = copy.deepcopy(accelerator.unwrap_model(unet.cpu(), keep_fp32_wrapper=False))
+    text_encoder_out = copy.deepcopy(accelerator.unwrap_model(text_encoder.cpu(), keep_fp32_wrapper=False))
 
     pipeline = TextToVideoSDPipeline.from_pretrained(
         path,
         unet=unet_out,
         text_encoder=text_encoder_out,
         vae=vae,
-    ).to(torch_dtype=torch.float16)
+    ).to(torch_dtype=torch.float32)
     
     handle_lora_save(
         use_unet_lora, 
@@ -548,6 +581,7 @@ def main(
     text_encoder_gradient_checkpointing: bool = False,
     checkpointing_steps: int = 500,
     resume_from_checkpoint: Optional[str] = None,
+    resume_step: Optional[int] = None,
     mixed_precision: Optional[str] = "fp16",
     use_8bit_adam: bool = False,
     enable_xformers_memory_efficient_attention: bool = True,
@@ -555,6 +589,7 @@ def main(
     seed: Optional[int] = None,
     train_text_encoder: bool = False,
     use_offset_noise: bool = False,
+    rescale_schedule: bool = False,
     offset_noise_strength: float = 0.1,
     extend_dataset: bool = False,
     cache_latents: bool = False,
@@ -565,6 +600,7 @@ def main(
     text_encoder_lora_modules: Tuple[str] = ["CLIPEncoderLayer"],
     lora_rank: int = 16,
     lora_path: str = '',
+    logger: str = 'tensorboard',
     **kwargs
 ):
 
@@ -573,7 +609,7 @@ def main(
     accelerator = Accelerator(
         gradient_accumulation_steps=gradient_accumulation_steps,
         mixed_precision=mixed_precision,
-        log_with="wandb",
+        log_with=logger,
         project_dir=output_dir
     )
 
@@ -711,6 +747,10 @@ def main(
     models_to_cast = [text_encoder, vae]
     cast_to_gpu_and_type(models_to_cast, accelerator, weight_dtype)
 
+    # Fix noise schedules to predcit light and dark areas if available.
+    if not use_offset_noise and rescale_schedule:
+        noise_scheduler.betas = enforce_zero_terminal_snr(noise_scheduler.betas)
+
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / gradient_accumulation_steps)
 
@@ -767,6 +807,7 @@ def main(
         video_length = latents.shape[2]
 
         # Sample noise that we'll add to the latents
+        use_offset_noise = use_offset_noise and not rescale_schedule
         noise = sample_noise(latents, offset_noise_strength, use_offset_noise)
         bsz = latents.shape[0]
 
@@ -792,10 +833,10 @@ def main(
                     negation=text_encoder_negation
             )
             cast_to_gpu_and_type([text_encoder], accelerator, torch.float32)
-                
-        # Fixes gradient checkpointing training.
+               
+        # *Potentially* Fixes gradient checkpointing training.
         # See: https://github.com/prigoyal/pytorch_memonger/blob/master/tutorial/Checkpointing_for_PyTorch_models.ipynb
-        if gradient_checkpointing or text_encoder_gradient_checkpointing:
+        if kwargs.get('eval_train', False):
             unet.eval()
             text_encoder.eval()
             
