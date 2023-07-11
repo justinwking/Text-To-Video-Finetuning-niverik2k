@@ -108,7 +108,7 @@ train_data:
 validation_data:
 
   # A custom prompt that is different from your training dataset. 
-  prompt: "tiffanydo naked, in an apartment building, cinematic"
+  prompt: "tiffanydo, in an apartment building, cinematic"
 
   # Whether or not to sample preview during training (Requires more VRAM).
   sample_preview: True
