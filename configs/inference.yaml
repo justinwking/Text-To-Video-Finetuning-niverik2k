@@ -1,0 +1,61 @@
+# Specify Where you would like tp save your files, prefix and suffix can be used to append a description to the beginning or end of the filename.
+output_dir: ./output
+prefix: ''
+suffix: ''
+# You can specify a list of models to iterate through.
+model: # HuggingFace repository or path to model checkpoint directory
+- 'model one'
+- 'model two'
+- 'model three'
+# You can specify a list of prompts to iterate through.
+prompt: # Text prompt to condition on
+- prompt one
+- prompt two
+- prompt three
+negative_prompt: null # Text prompt to condition against
+
+# Batch size for inference
+batch_size: 1 
+# Width and Height of output video
+width: 256 
+height: 256 
+# Total number of frames to generate
+num_frames: 16 
+# FPS of output video
+fps: 12 
+# Scale for guidance loss (higher values = more guidance, but possibly more artifacts)
+guidance_scale: 25 
+# Number of diffusion steps to run per frame.
+num_steps: 25 
+# Random seed to make generations reproducible.
+seed: null 
+
+# Number of frames to process at once (defaults to full sequence). When less than num_frames,
+# a round robin diffusion process is used to denoise the full sequence iteratively one window at a time.
+# Must be divide num_frames exactly!"
+window_size: null 
+#Batch size for VAE encoding/decoding to/from latents (higher values = faster inference, but more memory usage).
+vae_batch_size: 8 
+
+# For Vid2Vid, Input video here.
+# Path to video to initialize diffusion from (will be resized to the specified num_frames, height, and width).
+init_video: null
+# Strength of visual effect of init_video on the output (lower values adhere more closely to the text prompt, 
+# but have a less recognizable init_video).
+init_weight: 0.5
+
+# To Use a Lora input Lora Here
+#Path to Low Rank Adaptation checkpoint file (defaults to empty string, which uses no LoRA).
+lora_path: ''
+lora_rank: 64
+# Other Parameters that can be modified.
+#Device to run inference on (defaults to cuda).
+device: cuda
+#Make the video loop (by rotating frame order during diffusion).
+loop: false
+#Post-process the videos with LAMA to inpaint ModelScope's common watermarks.
+remove_watermark: false
+#Use SDP attention, PyTorch's built-in memory-efficient attention implementation.
+sdp: false
+#Use XFormers attnetion, a memory-efficient attention implementation (requires `pip install xformers`).
+xformers: false
