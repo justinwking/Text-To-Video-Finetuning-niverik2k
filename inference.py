@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 
-import argparse
+import argparse, yaml
 import os
 import platform
 import re
@@ -340,8 +340,8 @@ if __name__ == "__main__":
 
     # fmt: off
     parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--model", type=str, required=True, help="HuggingFace repository or path to model checkpoint directory")
-    parser.add_argument("-p", "--prompt", type=str, required=True, help="Text prompt to condition on")
+    parser.add_argument("-m", "--model", type=str, required=True, help="HuggingFace repository, path to model checkpoint directory, or path to yaml config file")
+    parser.add_argument("-p", "--prompt", type=str, required=False, default=" ", help="Text prompt to condition on")
     parser.add_argument("-n", "--negative-prompt", type=str, default=None, help="Text prompt to condition against")
     parser.add_argument("-o", "--output-dir", type=str, default="./output", help="Directory to save output video to")
     parser.add_argument("-B", "--batch-size", type=int, default=1, help="Batch size for inference")
@@ -369,71 +369,88 @@ if __name__ == "__main__":
     args = parser.parse_args()
     # fmt: on
 
-    # =========================================
-    # ====== validate and prepare inputs ======
-    # =========================================
-    prefix = f"{args.prefix}-" if len(str(args.prefix)) > 0 else args.prefix 
-    suffix = f"{args.suffix}-" if len(str(args.suffix)) > 0 else args.suffix 
-    out_name = f"{args.output_dir}/"
-    if args.init_video is not None:
-        out_name += f"[({Path(args.init_video).stem}) x {args.init_weight}] "
-    prompt = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", args.prompt) if platform.system() == "Windows" else args.prompt
-    out_name += f"{prefix}{prompt}{suffix}"
+    
 
-    args.prompt = [prompt] * args.batch_size
-    if args.negative_prompt is not None:
-        args.negative_prompt = [args.negative_prompt] * args.batch_size
-
-    if args.window_size is None:
-        args.window_size = args.num_frames
-
-    if args.init_video is not None:
-        vr = decord.VideoReader(args.init_video)
-        init = rearrange(vr[:], "f h w c -> c f h w").div(127.5).sub(1).unsqueeze(0)
-        init = interpolate(init, size=(args.num_frames, args.height, args.width), mode="trilinear")
-        args.init_video = init
-
-    # =========================================
-    # ============= sample videos =============
-    # =========================================
-
-    videos = inference(
-        model=args.model,
-        prompt=args.prompt,
-        negative_prompt=args.negative_prompt,
-        width=args.width,
-        height=args.height,
-        num_frames=args.num_frames,
-        window_size=args.window_size,
-        vae_batch_size=args.vae_batch_size,
-        num_steps=args.num_steps,
-        guidance_scale=args.guidance_scale,
-        init_video=args.init_video,
-        init_weight=args.init_weight,
-        device=args.device,
-        xformers=args.xformers,
-        sdp=args.sdp,
-        lora_path=args.lora_path,
-        lora_rank=args.lora_rank,
-        loop=args.loop,
-    )
-
-    # =========================================
-    # ========= write outputs to file =========
-    # =========================================
-
-    os.makedirs(args.output_dir, exist_ok=True)
-
-    for video in videos:
-        if args.remove_watermark:
-            print("Inpainting watermarks...")
-            video = rearrange(video, "c f h w -> f c h w").add(1).div(2)
-            video = inpaint_watermark(video)
-            video = rearrange(video, "f c h w -> f h w c").clamp(0, 1).mul(255)
-
-        else:
-            video = rearrange(video, "c f h w -> f h w c").clamp(-1, 1).add(1).mul(127.5)
-
-        video = video.byte().cpu().numpy()
-
-        export_to_video(video, f"{out_name} {str(uuid4())[:8]}.mp4", args.fps)
+    
+    if args['model'].lower().find('yaml') > -1:
+        try:
+            with open(args['model'], 'r') as file:
+                args = yaml.safe_load_all(file)
+                print("args retrieved from yaml")
+            args_listed{'models':args['model'],'prompts':args['prompt']}
+            args.pop('model')
+            args.pop('prompt')
+            args = argparse.Namespace(**args)
+        except Exception as e:
+            args_listed{'models':[args['model']],'prompts':[args['prompt']]}
+            print(e)
+    for single_model in args_listed['models']:
+        for single_prompt in argss_listed['prompts']:
+            # =========================================
+            # ====== validate and prepare inputs ======
+            # =========================================
+            prefix = f"{args.prefix}-" if len(str(args.prefix)) > 0 else args.prefix 
+            suffix = f"{args.suffix}-" if len(str(args.suffix)) > 0 else args.suffix 
+            out_name = f"{args.output_dir}/"
+            if args.init_video is not None:
+                out_name += f"[({Path(args.init_video).stem}) x {args.init_weight}] "
+            prompt = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", args.prompt) if platform.system() == "Windows" else args.prompt
+            out_name += f"{prefix}{prompt}{suffix}"
+        
+            args.prompt = [prompt] * args.batch_size
+            if args.negative_prompt is not None:
+                args.negative_prompt = [args.negative_prompt] * args.batch_size
+        
+            if args.window_size is None:
+                args.window_size = args.num_frames
+        
+            if args.init_video is not None:
+                vr = decord.VideoReader(args.init_video)
+                init = rearrange(vr[:], "f h w c -> c f h w").div(127.5).sub(1).unsqueeze(0)
+                init = interpolate(init, size=(args.num_frames, args.height, args.width), mode="trilinear")
+                args.init_video = init
+        
+            # =========================================
+            # ============= sample videos =============
+            # =========================================
+        
+            videos = inference(
+                model=single_model,
+                prompt=args.single_prompt,
+                negative_prompt=args.negative_prompt,
+                width=args.width,
+                height=args.height,
+                num_frames=args.num_frames,
+                window_size=args.window_size,
+                vae_batch_size=args.vae_batch_size,
+                num_steps=args.num_steps,
+                guidance_scale=args.guidance_scale,
+                init_video=args.init_video,
+                init_weight=args.init_weight,
+                device=args.device,
+                xformers=args.xformers,
+                sdp=args.sdp,
+                lora_path=args.lora_path,
+                lora_rank=args.lora_rank,
+                loop=args.loop,
+            )
+        
+            # =========================================
+            # ========= write outputs to file =========
+            # =========================================
+        
+            os.makedirs(args.output_dir, exist_ok=True)
+        
+            for video in videos:
+                if args.remove_watermark:
+                    print("Inpainting watermarks...")
+                    video = rearrange(video, "c f h w -> f c h w").add(1).div(2)
+                    video = inpaint_watermark(video)
+                    video = rearrange(video, "f c h w -> f h w c").clamp(0, 1).mul(255)
+        
+                else:
+                    video = rearrange(video, "c f h w -> f h w c").clamp(-1, 1).add(1).mul(127.5)
+        
+                video = video.byte().cpu().numpy()
+        
+                export_to_video(video, f"{out_name} {str(uuid4())[:8]}.mp4", args.fps)
