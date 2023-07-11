@@ -363,18 +363,22 @@ if __name__ == "__main__":
     parser.add_argument("-rw", "--remove-watermark", action="store_true", help="Post-process the videos with LAMA to inpaint ModelScope's common watermarks.")
     parser.add_argument("-l", "--loop", action="store_true", help="Make the video loop (by rotating frame order during diffusion).")
     parser.add_argument("-r", "--seed", type=int, default=None, help="Random seed to make generations reproducible.")
+    
+    parser.add_argument("-pfx", "--prefix", type=str, default="", help="Optional Prefix for file name.")
+    parser.add_argument("-sfx", "--suffix", type=str, default="", help="Optional Suffix for file name.")
     args = parser.parse_args()
     # fmt: on
 
     # =========================================
     # ====== validate and prepare inputs ======
     # =========================================
-
+    prefix = f"{args.prefix}-" if len(str(args.prefix)) > 0 else args.prefix 
+    suffix = f"{args.suffix}-" if len(str(args.suffix)) > 0 else args.suffix 
     out_name = f"{args.output_dir}/"
     if args.init_video is not None:
         out_name += f"[({Path(args.init_video).stem}) x {args.init_weight}] "
     prompt = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", args.prompt) if platform.system() == "Windows" else args.prompt
-    out_name += f"{prompt}"
+    out_name += f"{prefix}{prompt}{suffix}"
 
     args.prompt = [prompt] * args.batch_size
     if args.negative_prompt is not None:
